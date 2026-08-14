@@ -1,0 +1,11 @@
+# Dependências
+node_modules/
+npm-debug.log*
+
+# Config local
+.vscode/
+.idea/
+.DS_Store
+
+# Netlify
+.netlify/
