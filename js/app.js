@@ -171,6 +171,7 @@
         <button class="chip expense" data-action="add-tx-expense"><span class="ci">⬆️</span><span class="cl">Saída</span></button>
         <button class="chip invest" data-action="add-invest"><span class="ci">📈</span><span class="cl">Investir</span></button>
         <button class="chip accounts" data-action="add-account"><span class="ci">🏦</span><span class="cl">Nova conta</span></button>
+        <button class="chip accounts" data-action="import-ofx"><span class="ci">📄</span><span class="cl">Importar</span></button>
       </div>
 
       <div class="card">
@@ -241,6 +242,9 @@
         ${filtered.length ? filtered.map(row).join('') : `<div class="empty"><span class="ei">📭</span><p>Nenhuma transação aqui.</p></div>`}
       </div>
       <button class="btn" data-action="add-tx-expense">+ Nova transação</button>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn ghost" data-action="import-ofx">📄 Importar extrato</button>
+      </div>
     `;
   }
 
@@ -320,7 +324,10 @@
           ${state.accounts.map((a) => `<span style="font-size:.72rem;color:var(--muted)"><span class="dot" style="background:${a.color}"></span>${esc(a.bank)}</span>`).join('')}
         </div>
       </div>
-      <button class="btn" data-action="add-account">+ Nova conta</button>
+      <div class="actions">
+        <button class="btn" data-action="import-ofx">📄 Importar extrato</button>
+        <button class="btn" data-action="add-account">+ Nova conta</button>
+      </div>
     `;
   }
 
@@ -370,6 +377,84 @@
     if (!d) return '';
     const [y, m, dd] = d.split('-');
     return `${dd}/${m}/${y}`;
+  }
+
+  /* ============================ IMPORTADOR OFX ============================ */
+  const OFX_BANKS = {
+    '001': 'Banco do Brasil', '104': 'Caixa Econômica', '237': 'Bradesco',
+    '341': 'Itaú', '033': 'Santander', '260': 'Nubank', '077': 'Banco Inter',
+    '290': 'PagBank', '756': 'Sicoob', '748': 'Sicredi', '212': 'Banco Original',
+    '003': 'Banco da Amazônia', '041': 'Banrisul', '070': 'BRB', '341-B': 'Itaú',
+  };
+
+  function ofxVal(block, tag) {
+    const m = block.match(new RegExp('<' + tag + '>([\\s\\S]*?)<'));
+    return m ? m[1].trim() : '';
+  }
+
+  function ofxDate(s) {
+    const t = (s || '').trim().replace(/[^0-9]/g, '');
+    if (t.length < 8) return today();
+    return `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}`;
+  }
+
+  function parseOFX(text) {
+    const start = text.indexOf('<OFX');
+    if (start === -1) throw new Error('OFX não encontrado');
+    const body = text.slice(start);
+
+    const bankId = ofxVal(body, 'BANKID');
+    const acctId = ofxVal(body, 'ACCTID');
+    const balRaw = ofxVal(body, 'LEDGERBAL') || ofxVal(body, 'BALAMT') || ofxVal(body, 'AVAILBAL');
+    const balance = parseFloat(balRaw) || 0;
+
+    const blocks = body.match(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g) || [];
+    const txs = blocks.map((b) => {
+      const amt = parseFloat(ofxVal(b, 'TRNAMT')) || 0;
+      const name = ofxVal(b, 'NAME') || ofxVal(b, 'PAYEE') || '';
+      const memo = ofxVal(b, 'MEMO') || '';
+      const desc = [name, memo].filter(Boolean).join(' — ').trim() || 'Transação bancária';
+      const type = amt >= 0 ? 'income' : 'expense';
+      return {
+        fitId: ofxVal(b, 'FITID') || [ofxVal(b, 'DTPOSTED'), amt, name].join('|'),
+        type,
+        category: detectCat(type, name + ' ' + memo),
+        amount: Math.abs(amt),
+        description: desc.slice(0, 80),
+        date: ofxDate(ofxVal(b, 'DTPOSTED')),
+      };
+    });
+
+    return {
+      bankId,
+      bankName: OFX_BANKS[bankId] || (bankId ? 'Banco ' + bankId : 'Banco'),
+      acctId: acctId || '',
+      balance,
+      transactions: txs.filter((t) => t.amount > 0),
+    };
+  }
+
+  const AUTO_CATS = [
+    { type: 'expense', re: /mercado|supermercado|pão|padaria|carrefour|assai|atacadao|extra\b|dia\b|bom preco|rede\b/i, cat: 'alimento' },
+    { type: 'expense', re: /restaurante|lanchonete|ifood|rappi|uber eats|delivery|burger|pizza|hamburguer/i, cat: 'alimento' },
+    { type: 'expense', re: /aluguel|condominio|imobili|locacao/i, cat: 'moradia' },
+    { type: 'expense', re: /energia|enel|eletropaulo|coelba|celpe|copel|cemig|conta de luz|eletrica/i, cat: 'contas' },
+    { type: 'expense', re: /internet|fibra|vivo|claro|tim|sky|streaming|spotify|netflix|assinatura/i, cat: 'contas' },
+    { type: 'expense', re: /agua|saneamento|sabesp|aegea|agua\b/i, cat: 'contas' },
+    { type: 'expense', re: /posto|gasolina|combust|uber|99|taxi|transporte|passagem|onibus|metro|pedagio|estacionamento/i, cat: 'transporte' },
+    { type: 'expense', re: /farmacia|drogaria|drogasil|pague menos|medico|doutor|hospital|dpsp|saude\b/i, cat: 'saude' },
+    { type: 'expense', re: /curso|escola|faculdade|universidade|udemy|alura|livraria|livro/i, cat: 'educacao' },
+    { type: 'expense', re: /cinema|jogo|playstation|steam|show|festa|bar\b|balada|netflix|lazer|game/i, cat: 'lazer' },
+    { type: 'expense', re: /amazon|shopee|mercado livre|magalu|casas bahia|roupa|sapato|ecommerce|loja/i, cat: 'compras' },
+    { type: 'income', re: /salario|salário|admissao|holerite|pix recebido|transferencia recebida|ted recebida|deposito/i, cat: 'salario' },
+    { type: 'income', re: /dividendo|jcp|rendimento|cdi|tesouro|fii|investimento|poupanca/i, cat: 'invest' },
+  ];
+
+  function detectCat(type, text) {
+    for (const r of AUTO_CATS) {
+      if (r.type === type && r.re.test(text)) return r.cat;
+    }
+    return type === 'income' ? 'outro-in' : 'outro-out';
   }
 
   /* ============================ MODAIS ============================ */
@@ -437,6 +522,92 @@
       <label class="f"><span>Valor atual (R$)</span><input type="number" id="invCurrent" step="0.01" min="0" placeholder="0,00" inputmode="decimal"></label>
       <button class="btn" id="saveInv">Salvar</button>
     `;
+  }
+
+  /* --- Importar extrato OFX --- */
+  function formImport() {
+    return `
+      <h2>📄 Importar extrato</h2>
+      <p style="font-size:.85rem;color:var(--muted);line-height:1.5;margin-bottom:14px">
+        Baixe o extrato em <b>OFX/QFX</b> no internet banking do seu banco (Banco do Brasil, Caixa, Itaú, Bradesco, Santander, Nubank...) e importe aqui para ver o que aconteceu na sua conta.
+      </p>
+      <label class="f"><span>Arquivo do extrato (.ofx / .qfx)</span><input type="file" id="ofxFile" accept=".ofx,.qfx,application/x-ofx,text/ofx,application/x-qfx"></label>
+      <p style="font-size:.72rem;color:var(--muted);line-height:1.5">Depois de escolher o arquivo, você confirma a importação. Os lançamentos ficam classificados automaticamente (mercado, transporte, salário...) e você pode editar depois.</p>
+    `;
+  }
+
+  function bindImport() {
+    const input = $('#ofxFile');
+    input.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          showImportSummary(parseOFX(reader.result));
+        } catch (err) {
+          toast('⚠️ Arquivo inválido. Use um extrato no formato OFX/QFX.');
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  function showImportSummary(parsed) {
+    const { transactions } = parsed;
+    if (!transactions.length) { toast('⚠️ Nenhuma transação encontrada no arquivo'); return; }
+    const income = transactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const expense = transactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const label = `${parsed.bankName}${parsed.acctId ? ' · conta ••' + String(parsed.acctId).slice(-4) : ''}`;
+    const options = [`<option value="__new__">➕ Criar nova conta (${esc(label)})</option>`]
+      .concat(state.accounts.map((a) => `<option value="${a.id}">${a.ico} ${esc(a.name)} (${esc(a.bank)})</option>`))
+      .join('');
+    openModal(`
+      <h2>📄 ${esc(parsed.bankName)}</h2>
+      <p style="font-size:.86rem;color:var(--muted);margin-bottom:12px">
+        ${parsed.acctId ? 'Conta ••' + esc(String(parsed.acctId).slice(-4)) : ''}
+        · <b>${transactions.length}</b> lançamentos
+        · <span style="color:var(--green)">+ ${money(income)}</span> entradas
+        · <span style="color:var(--red)">- ${money(expense)}</span> saídas
+      </p>
+      <label class="f"><span>Importar em qual conta?</span><select id="importTarget">${options}</select></label>
+      <p style="font-size:.72rem;color:var(--muted);margin-bottom:14px">"Criar nova conta" usa o saldo final do extrato: <b>${money(parsed.balance)}</b>.</p>
+      <button class="btn" id="confirmImport">Importar ${transactions.length} lançamentos</button>
+    `);
+    $('#confirmImport').addEventListener('click', () => confirmImport(parsed));
+  }
+
+  function confirmImport(parsed) {
+    const target = $('#importTarget').value;
+    let account;
+    if (target === '__new__') {
+      account = {
+        id: uid(),
+        name: parsed.acctId ? 'Conta ••' + String(parsed.acctId).slice(-4) : parsed.bankName,
+        bank: parsed.bankName,
+        color: '#0984E3',
+        ico: '🏛️',
+        balance: parsed.balance,
+      };
+      state.accounts.push(account);
+    } else {
+      account = state.accounts.find((a) => a.id === target);
+    }
+    if (!account) return;
+
+    const existingFit = new Set(state.transactions.map((t) => t.fitId).filter(Boolean));
+    let added = 0;
+    for (const t of parsed.transactions) {
+      if (t.fitId && existingFit.has(t.fitId)) continue;
+      if (t.fitId) existingFit.add(t.fitId);
+      state.transactions.push(Object.assign({ id: uid() }, t, { accountId: account.id }));
+      added++;
+    }
+    save();
+    toast(added
+      ? `✅ ${added} lançamento(s) importado(s)${added < parsed.transactions.length ? ` (${parsed.transactions.length - added} duplicado(s) ignorado(s))` : ''}`
+      : '⚠️ Nenhum lançamento novo (tudo já estava importado)');
+    closeModal();
   }
 
   function toast(msg) {
@@ -535,6 +706,7 @@
       case 'add-tx-expense': openModal(formTx('expense')); bindFormTx(); break;
       case 'add-account': openModal(formAccount()); break;
       case 'add-invest': openModal(formInvest()); break;
+      case 'import-ofx': openModal(formImport()); bindImport(); break;
       case 'invest-hint':
         toast('💡 Diversifique: renda fixa + ações + FIIs');
         break;
