@@ -1,0 +1,19 @@
+{
+  "name": "pocket-money",
+  "version": "1.0.0",
+  "description": "Personal finance tracker - control your expenses and income",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "keywords": ["finance", "tracker", "expenses", "budget"],
+  "author": "andreprimo71-maker",
+  "license": "MIT",
+  "devDependencies": {
+    "nodemon": "^3.0.0",
+    "jest": "^29.0.0"
+  },
+  "dependencies": {}
+}
