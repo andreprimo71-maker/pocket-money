@@ -50,3 +50,6 @@ coverage/
 # Local development
 *.local
 local-*
+
+# Netlify
+.netlify/
